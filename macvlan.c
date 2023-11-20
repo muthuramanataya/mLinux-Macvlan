@@ -40,6 +40,9 @@
 #define MACVLAN_F_PASSTHRU	1
 #define MACVLAN_F_ADDRCHANGE	2
 
+#define DRV_VERSION 	"0.0.1"
+#define ATAYA_VER_STR	"Ataya-v0.0.1"
+
 struct macvlan_port {
 	struct net_device	*dev;
 	struct hlist_head	vlan_hash[MACVLAN_HASH_SIZE];
@@ -1956,6 +1959,7 @@ static int __init macvlan_init_module(void)
 	err = macvlan_link_register(&macvlan_link_ops);
 	if (err < 0)
 		goto err1;
+	printk("Macvlan driver %s Initialzied\n", ATAYA_VER_STR);
 	return 0;
 err1:
 	unregister_netdevice_notifier(&macvlan_notifier_block);
@@ -1966,6 +1970,7 @@ static void __exit macvlan_cleanup_module(void)
 {
 	rtnl_link_unregister(&macvlan_link_ops);
 	unregister_netdevice_notifier(&macvlan_notifier_block);
+	printk("Macvlan driver %s De-Initialzied\n", ATAYA_VER_STR);
 }
 
 module_init(macvlan_init_module);
@@ -1973,5 +1978,6 @@ module_exit(macvlan_cleanup_module);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Patrick McHardy <kaber@trash.net>");
-MODULE_DESCRIPTION("Driver for MAC address based VLANs - Ataya v1.0");
+MODULE_DESCRIPTION("Driver for MAC address based VLANs");
+MODULE_VERSION(DRV_VERSION);
 MODULE_ALIAS_RTNL_LINK("macvlan");
