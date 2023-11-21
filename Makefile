@@ -26,7 +26,11 @@ clean:
 	rm -f macvlan.ko
 
 install:
-	mv $(MACVLAN_DIR)/macvlan.ko $(MACVLAN_DIR)/orig-macvlan.ko || echo "OK!"
+	if [ -f $(MACVLAN_DIR)/orig-macvlan.ko ]; then \
+        echo "Original macvlan exists and skipped";\
+    else \
+		mv $(MACVLAN_DIR)/macvlan.ko $(MACVLAN_DIR)/orig-macvlan.ko || echo "OK!"; \
+	fi
 	rmmod macvlan || echo "OK!"
 	cp macvlan.ko $(MACVLAN_DIR)/
 	modprobe macvlan
@@ -40,6 +44,9 @@ update:
 	
 uninstall:
 	rmmod macvlan || echo "OK!"
-	rm -f $(MACVLAN_DIR)/macvlan.ko
+	if [ -f $(MACVLAN_DIR)/orig-macvlan.ko ]; then	\
+        echo "Original macvlan exists and restored";\
+		rm -f $(MACVLAN_DIR)/macvlan.ko;\
+		mv $(MACVLAN_DIR)/orig-macvlan.ko $(MACVLAN_DIR)/macvlan.ko;\
+	fi
 	sed -zi "s/macvlan\n//g" /etc/modules
-	mv $(MACVLAN_DIR)/orig-macvlan.ko $(MACVLAN_DIR)/macvlan.ko || echo "OK!"
