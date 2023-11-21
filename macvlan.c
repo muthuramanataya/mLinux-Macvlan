@@ -1978,6 +1978,6 @@ module_exit(macvlan_cleanup_module);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Patrick McHardy <kaber@trash.net>");
-MODULE_DESCRIPTION("Driver for MAC address based VLANs");
+MODULE_DESCRIPTION("Driver for MAC address based VLANs - Ataya");
 MODULE_VERSION(DRV_VERSION);
 MODULE_ALIAS_RTNL_LINK("macvlan");
