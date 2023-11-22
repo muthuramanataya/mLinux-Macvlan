@@ -40,8 +40,8 @@
 #define MACVLAN_F_PASSTHRU	1
 #define MACVLAN_F_ADDRCHANGE	2
 
-#define DRV_VERSION 	"0.0.1"
-#define ATAYA_VER_STR	"Ataya-v0.0.1"
+#define DRV_VERSION 	"0.0.2"
+#define ATAYA_VER_STR	"Ataya-v0.0.2"
 
 struct macvlan_port {
 	struct net_device	*dev;
@@ -260,7 +260,7 @@ static int macvlan_broadcast_one(struct sk_buff *skb,
 			skb_reset_transport_header(skb);
 		skb_reset_mac_header(skb);		
 
-		ret = skb_vlan_push(skb,  ntohs(skb->vlan_proto), skb->vlan_tci);
+		ret = skb_vlan_push(skb,  skb->vlan_proto, skb->vlan_tci);
 		if (ret) {
 			printk("%s: skb_vlan_push ret: %d\n", __func__, ret);
 		}
@@ -518,7 +518,7 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 			skb_reset_transport_header(nskb);
 		skb_reset_mac_header(nskb);		
 
-		ret = skb_vlan_push(nskb,  ntohs(nskb->vlan_proto), nskb->vlan_tci);
+		ret = skb_vlan_push(nskb,  nskb->vlan_proto, nskb->vlan_tci);
 		if (ret) {
 			printk("%s: skb_vlan_push ret: %d\n", __func__, ret);
 		}
@@ -639,7 +639,7 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 			skb_reset_transport_header(skb);
 		skb_reset_mac_header(skb);		
 
-		ret = skb_vlan_push(skb,  ntohs(skb->vlan_proto), skb->vlan_tci);
+		ret = skb_vlan_push(skb,  skb->vlan_proto, skb->vlan_tci);
 		if (ret) {
 			printk("%s: skb_vlan_push ret: %d\n", __func__, ret);
 		}
@@ -1978,6 +1978,6 @@ module_exit(macvlan_cleanup_module);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Patrick McHardy <kaber@trash.net>");
-MODULE_DESCRIPTION("Driver for MAC address based VLANs");
+MODULE_DESCRIPTION("Driver for MAC address based VLANs - Ataya");
 MODULE_VERSION(DRV_VERSION);
 MODULE_ALIAS_RTNL_LINK("macvlan");

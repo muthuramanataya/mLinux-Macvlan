@@ -7,6 +7,7 @@
 KVERSION := $(shell uname -r)
 KERNEL_DIR := /usr/src/linux-headers-$(KVERSION)
 KDIR := /lib/modules/$(KVERSION)/build
+MACVLAN_DIR := /usr/lib/modules/$(KVERSION)/kernel/drivers/net
 
 INCLUDEDIR = $(KERNEL_DIR)/include
 
@@ -23,3 +24,29 @@ all:
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 	rm -f macvlan.ko
+
+install:
+	if [ -f $(MACVLAN_DIR)/orig-macvlan.ko ]; then \
+        echo "Original macvlan exists and skipped";\
+    else \
+		mv $(MACVLAN_DIR)/macvlan.ko $(MACVLAN_DIR)/orig-macvlan.ko || echo "OK!"; \
+	fi
+	rmmod macvlan || echo "OK!"
+	cp macvlan.ko $(MACVLAN_DIR)/
+	modprobe macvlan
+	echo "macvlan" >> /etc/modules
+
+update:
+	rmmod macvlan || echo "OK!"
+	rm -f $(MACVLAN_DIR)/macvlan.ko
+	cp macvlan.ko $(MACVLAN_DIR)/
+	modprobe macvlan
+	
+uninstall:
+	rmmod macvlan || echo "OK!"
+	if [ -f $(MACVLAN_DIR)/orig-macvlan.ko ]; then	\
+        echo "Original macvlan exists and restored";\
+		rm -f $(MACVLAN_DIR)/macvlan.ko;\
+		mv $(MACVLAN_DIR)/orig-macvlan.ko $(MACVLAN_DIR)/macvlan.ko;\
+	fi
+	sed -zi "s/macvlan\n//g" /etc/modules
