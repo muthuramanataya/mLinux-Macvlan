@@ -26,32 +26,34 @@ clean:
 	rm -f macvlan.ko
 
 install:
-	if [ -f macvlan.ko ]; then \
-		if [ -f $(MACVLAN_DIR)/orig-macvlan.ko ]; then \
-			echo "Original macvlan exists and skipped";\
-		else \
-			mv $(MACVLAN_DIR)/macvlan.ko $(MACVLAN_DIR)/orig-macvlan.ko || echo "OK!"; \
-		fi
-		rmmod macvlan || echo "OK!"
-		cp macvlan.ko $(MACVLAN_DIR)/; \
-		modprobe macvlan; \
-		sed -zi "s/macvlan\n//g" /etc/modules
-		echo "macvlan" >> /etc/modules; \
-	fi
+ifneq (,$(wildcard ./macvlan.ko))
+ifneq ("$(wildcard  $(MACVLAN_DIR)/orig-macvlan.ko)","")
+	echo "Original macvlan exists and skipped"
+else
+	mv $(MACVLAN_DIR)/macvlan.ko $(MACVLAN_DIR)/orig-macvlan.ko || echo "OK!"
+endif
+	rmmod macvlan || echo "OK!"
+	cp macvlan.ko $(MACVLAN_DIR)/
+	modprobe macvlan
+	sed -zi "s/macvlan\n//g" /etc/modules
+	echo "macvlan" >> /etc/modules
+endif
 
 update:
-	if [ -f macvlan.ko ]; then \
-		rmmod macvlan || echo "OK!"; \
-		rm -f $(MACVLAN_DIR)/macvlan.ko; \
-		cp macvlan.ko $(MACVLAN_DIR)/; \
-		modprobe macvlan; \
-	fi
+ifneq (,$(wildcard ./macvlan.ko))
+	rmmod macvlan || echo "OK!"
+	rm -f $(MACVLAN_DIR)/macvlan.ko
+	cp macvlan.ko $(MACVLAN_DIR)/
+	modprobe macvlan
+	sed -zi "s/macvlan\n//g" /etc/modules
+	echo "macvlan" >> /etc/modules
+endif
 	
 uninstall:
+ifneq ("$(wildcard  $(MACVLAN_DIR)/orig-macvlan.ko)","")
+	echo "Original macvlan exists and restored"
 	rmmod macvlan || echo "OK!"
-	if [ -f $(MACVLAN_DIR)/orig-macvlan.ko ]; then	\
-        echo "Original macvlan exists and restored";\
-		rm -f $(MACVLAN_DIR)/macvlan.ko;\
-		mv $(MACVLAN_DIR)/orig-macvlan.ko $(MACVLAN_DIR)/macvlan.ko;\
-	fi
+	rm -f $(MACVLAN_DIR)/macvlan.ko
+	mv $(MACVLAN_DIR)/orig-macvlan.ko $(MACVLAN_DIR)/macvlan.ko
 	sed -zi "s/macvlan\n//g" /etc/modules
+endif
