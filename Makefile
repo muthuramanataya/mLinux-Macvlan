@@ -28,7 +28,7 @@ clean:
 install:
 ifneq (,$(wildcard ./macvlan.ko))
 ifneq ("$(wildcard  $(MACVLAN_DIR)/orig-macvlan.ko)","")
-	echo "Original macvlan exists and skipped"
+	echo "Original macvlan exists and skipped!!!"
 else
 	mv $(MACVLAN_DIR)/macvlan.ko $(MACVLAN_DIR)/orig-macvlan.ko || echo "OK!"
 endif
@@ -41,6 +41,9 @@ endif
 
 update:
 ifneq (,$(wildcard ./macvlan.ko))
+ifeq ("$(wildcard  $(MACVLAN_DIR)/orig-macvlan.ko)","")
+	echo "Original macvlan doesn't exists and skipped!!!"
+else
 	rmmod macvlan || echo "OK!"
 	rm -f $(MACVLAN_DIR)/macvlan.ko
 	cp macvlan.ko $(MACVLAN_DIR)/
@@ -48,10 +51,11 @@ ifneq (,$(wildcard ./macvlan.ko))
 	sed -zi "s/macvlan\n//g" /etc/modules
 	echo "macvlan" >> /etc/modules
 endif
+endif
 	
 uninstall:
 ifneq ("$(wildcard  $(MACVLAN_DIR)/orig-macvlan.ko)","")
-	echo "Original macvlan exists and restored"
+	echo "Original macvlan exists and restored!!!"
 	rmmod macvlan || echo "OK!"
 	rm -f $(MACVLAN_DIR)/macvlan.ko
 	mv $(MACVLAN_DIR)/orig-macvlan.ko $(MACVLAN_DIR)/macvlan.ko
