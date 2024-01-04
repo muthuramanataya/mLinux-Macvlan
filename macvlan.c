@@ -37,11 +37,11 @@
 #define MACVLAN_HASH_SIZE	(1<<MACVLAN_HASH_BITS)
 #define MACVLAN_DEFAULT_BC_QUEUE_LEN	1000
 
-#define MACVLAN_F_PASSTHRU	1
+#define MACVLAN_F_PASSTHRU		1
 #define MACVLAN_F_ADDRCHANGE	2
 
-#define DRV_VERSION 	"0.0.2"
-#define ATAYA_VER_STR	"Ataya-v0.0.2"
+#define DRV_VERSION 	"0.0.3"
+#define ATAYA_VER_STR	"Ataya-v0.0.3"
 
 struct macvlan_port {
 	struct net_device	*dev;
@@ -49,12 +49,12 @@ struct macvlan_port {
 	struct list_head	vlans;
 	struct sk_buff_head	bc_queue;
 	struct work_struct	bc_work;
-	u32			bc_queue_len_used;
-	u32			flags;
-	int			count;
+	u32					bc_queue_len_used;
+	u32					flags;
+	int					count;
 	struct hlist_head	vlan_source_hash[MACVLAN_HASH_SIZE];
 	DECLARE_BITMAP(mc_filter, MACVLAN_MC_FILTER_SZ);
-	unsigned char           perm_addr[ETH_ALEN];
+	unsigned char       perm_addr[ETH_ALEN];
 };
 
 struct macvlan_source_entry {
@@ -245,20 +245,20 @@ static int macvlan_broadcast_one(struct sk_buff *skb,
 {
 	struct net_device *dev = vlan->dev;
 
+	// Ataya
 	// printk("%s: Entry VLAN id: %#x\n", __func__,
 	// 	skb_vlan_tag_get_id(skb));
-
-	if (skb_vlan_tag_present(skb)) {
+	if (skb->dev->xdp_prog && skb_vlan_tag_present(skb)) {
 		int ret;
 		// printk("%s: present VLAN proto-vid: %04x-%04x\n", __func__,
 		// 	skb->vlan_proto, skb_vlan_tag_get_id(skb));
 		// dumpData((u8 *)(skb->data - sizeof(struct ethhdr)), "Before");
 
 		skb_push(skb, sizeof(struct ethhdr));
+		skb_reset_mac_header(skb);
 		skb_reset_network_header(skb);
 		if (!skb_transport_header_was_set(skb))
 			skb_reset_transport_header(skb);
-		skb_reset_mac_header(skb);		
 
 		ret = skb_vlan_push(skb,  skb->vlan_proto, skb->vlan_tci);
 		if (ret) {
@@ -505,18 +505,19 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 	if (ether_addr_equal_64bits(eth_hdr(skb)->h_dest, dev->dev_addr))
 		nskb->pkt_type = PACKET_HOST;
 
+	// Ataya
 	// Muthu - Re-added the striped vlan tag into sk_buff
-	if (skb_vlan_tag_present(nskb)) {
+	if (skb->dev->xdp_prog && skb_vlan_tag_present(nskb)) {
 		int ret;
 		// printk("%s: present VLAN proto-vid: %04x-%04x\n", __func__,
 		// 	nskb->vlan_proto, skb_vlan_tag_get_id(nskb));
 		// dumpData((u8 *)(skb->data - sizeof(struct ethhdr)), "Before");
 
 		skb_push(nskb, sizeof(struct ethhdr));
+		skb_reset_mac_header(nskb);
 		skb_reset_network_header(nskb);
 		if (!skb_transport_header_was_set(nskb))
 			skb_reset_transport_header(nskb);
-		skb_reset_mac_header(nskb);		
 
 		ret = skb_vlan_push(nskb,  nskb->vlan_proto, nskb->vlan_tci);
 		if (ret) {
@@ -578,14 +579,16 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 			return RX_HANDLER_CONSUMED;
 		*pskb = skb;
 		eth = eth_hdr(skb);
-		if (macvlan_forward_source(skb, port, eth->h_source))
+		if (macvlan_forward_source(skb, port, eth->h_source)) {
+			kfree_skb(skb);
 			return RX_HANDLER_CONSUMED;
+		}
 		src = macvlan_hash_lookup(port, eth->h_source);
 		if (src && src->mode != MACVLAN_MODE_VEPA &&
 		    src->mode != MACVLAN_MODE_BRIDGE) {
 			/* forward to original port. */
 			vlan = src;
-			// In macvlan_broadvast_one(), we embed the VLAN header
+			// In macvlan_broadcast_one(), we embed the VLAN header
 			// information even it got failed because netif_rx called
 			// here.
 			ret = macvlan_broadcast_one(skb, vlan, eth, 0) ?:
@@ -600,8 +603,10 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 		return RX_HANDLER_PASS;
 	}
 
-	if (macvlan_forward_source(skb, port, eth->h_source))
+	if (macvlan_forward_source(skb, port, eth->h_source)) {
+		kfree_skb(skb);
 		return RX_HANDLER_CONSUMED;
+	}
 	if (macvlan_passthru(port))
 		vlan = list_first_or_null_rcu(&port->vlans,
 					      struct macvlan_dev, list);
@@ -627,17 +632,18 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 	skb->dev = dev;
 	skb->pkt_type = PACKET_HOST;
 
-	if (skb_vlan_tag_present(skb)) {
+	// Ataya
+	if (skb->dev->xdp_prog && skb_vlan_tag_present(skb)) {
 		int ret;
 		// printk("%s: present VLAN proto-vid: %04x-%04x\n", __func__,
 		// 	skb->vlan_proto, skb_vlan_tag_get_id(skb));
 		// dumpData((u8 *)(skb->data - sizeof(struct ethhdr)), "Before");
 
 		skb_push(skb, sizeof(struct ethhdr));
+		skb_reset_mac_header(skb);
 		skb_reset_network_header(skb);
 		if (!skb_transport_header_was_set(skb))
 			skb_reset_transport_header(skb);
-		skb_reset_mac_header(skb);		
 
 		ret = skb_vlan_push(skb,  skb->vlan_proto, skb->vlan_tci);
 		if (ret) {
@@ -664,10 +670,11 @@ static int macvlan_queue_xmit(struct sk_buff *skb, struct net_device *dev)
 
 		/* send to other bridge ports directly */
 		if (is_multicast_ether_addr(eth->h_dest)) {
+			// Ataya
+			skb_reset_mac_header(skb);
 			skb_reset_network_header(skb);
 			if (!skb_transport_header_was_set(skb))
 				skb_reset_transport_header(skb);
-			skb_reset_mac_header(skb);			
 			// printk("%s: Bridge & Multicast\n", __func__);
 			macvlan_broadcast_xmit(skb, port, dev, MACVLAN_MODE_BRIDGE);
 			goto xmit_world;
@@ -683,10 +690,10 @@ static int macvlan_queue_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 xmit_world:
 	skb->dev = vlan->lowerdev;
+	skb_reset_mac_header(skb);
 	skb_reset_network_header(skb);
 	if (!skb_transport_header_was_set(skb))
 		skb_reset_transport_header(skb);
-	skb_reset_mac_header(skb);	
 	// printk("%s: Xmit world skb->proto: 0x%04x\n", __func__,
 	// 	skb->protocol);
 	return dev_queue_xmit_accel(skb,
@@ -710,7 +717,7 @@ static netdev_tx_t macvlan_start_xmit(struct sk_buff *skb,
 	unsigned int len = skb->len;
 	int ret;
 
-	//printk("%s: Entry skb->proto: 0x%04x\n", __func__, skb->protocol);
+	// printk("%s: Entry skb->proto: 0x%04x\n", __func__, skb->protocol);
 	if (unlikely(netpoll_tx_running(dev))) {
 		//printk("%s: netpoll tx not running\n", __func__);
 		return macvlan_netpoll_send_skb(vlan, skb);
@@ -1669,8 +1676,10 @@ destroy_macvlan_port:
 	/* the macvlan port may be freed by macvlan_uninit when fail to register.
 	 * so we destroy the macvlan port only when it's valid.
 	 */
-	if (create && macvlan_port_get_rtnl(lowerdev))
+	if (create && macvlan_port_get_rtnl(lowerdev)) {
+		macvlan_flush_sources(port, vlan);
 		macvlan_port_destroy(port->dev);
+	}
 	return err;
 }
 EXPORT_SYMBOL_GPL(macvlan_common_newlink);
