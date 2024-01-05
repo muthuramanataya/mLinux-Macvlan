@@ -40,8 +40,8 @@
 #define MACVLAN_F_PASSTHRU		1
 #define MACVLAN_F_ADDRCHANGE	2
 
-#define DRV_VERSION 	"0.0.3"
-#define ATAYA_VER_STR	"Ataya-v0.0.3"
+#define DRV_VERSION 	"0.0.4"
+#define ATAYA_VER_STR	"Ataya-v0.0.4"
 
 struct macvlan_port {
 	struct net_device	*dev;
@@ -248,7 +248,8 @@ static int macvlan_broadcast_one(struct sk_buff *skb,
 	// Ataya
 	// printk("%s: Entry VLAN id: %#x\n", __func__,
 	// 	skb_vlan_tag_get_id(skb));
-	if (skb->dev->xdp_prog && skb_vlan_tag_present(skb)) {
+	//if (skb->dev->xdp_prog && skb_vlan_tag_present(skb)) {
+	if (skb_vlan_tag_present(skb)) {
 		int ret;
 		// printk("%s: present VLAN proto-vid: %04x-%04x\n", __func__,
 		// 	skb->vlan_proto, skb_vlan_tag_get_id(skb));
@@ -507,7 +508,8 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 
 	// Ataya
 	// Muthu - Re-added the striped vlan tag into sk_buff
-	if (skb->dev->xdp_prog && skb_vlan_tag_present(nskb)) {
+	// if (skb->dev->xdp_prog && skb_vlan_tag_present(nskb)) {
+	if (skb_vlan_tag_present(nskb)) {
 		int ret;
 		// printk("%s: present VLAN proto-vid: %04x-%04x\n", __func__,
 		// 	nskb->vlan_proto, skb_vlan_tag_get_id(nskb));
@@ -633,7 +635,8 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 	skb->pkt_type = PACKET_HOST;
 
 	// Ataya
-	if (skb->dev->xdp_prog && skb_vlan_tag_present(skb)) {
+	// if (skb->dev->xdp_prog && skb_vlan_tag_present(skb)) {
+	if (skb_vlan_tag_present(skb)) {
 		int ret;
 		// printk("%s: present VLAN proto-vid: %04x-%04x\n", __func__,
 		// 	skb->vlan_proto, skb_vlan_tag_get_id(skb));
