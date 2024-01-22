@@ -15,6 +15,10 @@ EXTRA_CFLAGS += -I $(KERNEL_DIR)
 EXTRA_CFLAGS += -I $(INCLUDEDIR)
 EXTRA_CFLAGS += -DDEBUG -g
 
+ifeq ($(TARGET),debug)
+EXTRA_CFLAGS += -DATAYA_MACVLAN_DBG
+endif
+
 obj-m += macvlan.o
 
 all:

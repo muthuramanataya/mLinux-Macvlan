@@ -43,6 +43,17 @@
 #define DRV_VERSION 	"0.0.3"
 #define ATAYA_VER_STR	"Ataya-v0.0.3"
 
+#ifdef ATAYA_MACVLAN_DBG
+#define DBG(fmt, args...) do {      \
+	printk_ratelimited("[AMACV]: %s: "fmt, __func__, ##args);       \
+} while(0)
+#else
+#define DBG(fmt, args...) do {      \
+} while(0)
+#endif
+
+#define AMACV_LOG(fmt, args...) DBG(fmt, ##args)
+
 struct macvlan_port {
 	struct net_device	*dev;
 	struct hlist_head	vlan_hash[MACVLAN_HASH_SIZE];
@@ -159,6 +170,9 @@ static int macvlan_hash_add_source(struct macvlan_dev *vlan,
 	struct macvlan_source_entry *entry;
 	struct hlist_head *h;
 
+	AMACV_LOG("Entry - vlan: %p addr: %s\n", vlan,
+		addr);
+
 	entry = macvlan_hash_lookup_source(vlan, addr);
 	if (entry)
 		return 0;
@@ -181,6 +195,9 @@ static void macvlan_hash_add(struct macvlan_dev *vlan)
 	struct macvlan_port *port = vlan->port;
 	const unsigned char *addr = vlan->dev->dev_addr;
 	u32 idx = macvlan_eth_hash(addr);
+
+	AMACV_LOG("Entry - vlan: %p idx: %#x addr: %s\n", vlan,
+		idx, addr);
 
 	hlist_add_head_rcu(&vlan->hlist, &port->vlan_hash[idx]);
 }
@@ -226,16 +243,31 @@ static bool macvlan_addr_busy(const struct macvlan_port *port,
 	return false;
 }
 
-#if 0
-static void dumpData(u8 *buf, char *str) 
+#ifdef DATAYA_MACVLAN_DBG
+static inline void dump_data_bytes(u8 *buf, u16 len, char *dump_str)
 {
-	int i;
+    u16 i, n;
+    char str[512], *strp;
 
-	printk("%s: \n", str);
-	for (i = 0; i < 24; i++) {
-		printk("%02x ", buf[i]);
-	}
-	printk("\n");
+    AMACV_LOG("Dump Data of: %s\n", dump_str);
+
+    strp = &str[0];
+    for (i = 0; i < len; i++) {
+        if (i % 16 == 0) {
+            *strp = '\0';
+            strp = &str[0];
+            AMACV_LOG("%s\n", str);
+        }
+        n = sprintf(strp, "%02x ", buf[i]);
+        strp += n;
+    }
+    *strp = '\0';
+    AMACV_LOG("%s\n", str);
+}
+#else
+static inline void dump_data_bytes(u8 *buf, u16 len, char *dump_str)
+{
+	// Nothing to print
 }
 #endif
 
@@ -246,14 +278,15 @@ static int macvlan_broadcast_one(struct sk_buff *skb,
 	struct net_device *dev = vlan->dev;
 
 	// Ataya
-	// printk("%s: Entry VLAN id: %#x\n", __func__,
-	// 	skb_vlan_tag_get_id(skb));
+	AMACV_LOG("Entry - vlan: %p tag: %#x local: %#x\n", vlan,
+		skb_vlan_tag_get_id(skb), local);
+
 	//if (skb->dev->xdp_prog && skb_vlan_tag_present(skb)) {
 	if (skb_vlan_tag_present(skb)) {
 		int ret;
-		// printk("%s: present VLAN proto-vid: %04x-%04x\n", __func__,
-		// 	skb->vlan_proto, skb_vlan_tag_get_id(skb));
-		// dumpData((u8 *)(skb->data - sizeof(struct ethhdr)), "Before");
+		AMACV_LOG("present VLAN proto-vid: %04x-%04x\n",
+			skb->vlan_proto, skb_vlan_tag_get_id(skb));
+		dump_data_bytes((u8 *)(skb->data - sizeof(struct ethhdr)), 24, "bcast_one before");
 
 		skb_push(skb, sizeof(struct ethhdr));
 		skb_reset_mac_header(skb);
@@ -263,9 +296,9 @@ static int macvlan_broadcast_one(struct sk_buff *skb,
 
 		ret = skb_vlan_push(skb,  skb->vlan_proto, skb->vlan_tci);
 		if (ret) {
-			printk("%s: skb_vlan_push ret: %d\n", __func__, ret);
+			AMACV_LOG("skb_vlan_push ret: %d\n", ret);
 		}
-		// dumpData((u8 *)skb->data, "After");
+		dump_data_bytes((u8 *)skb->data, 24, "bcast_one After");
 	}
 
 	if (local)
@@ -286,8 +319,8 @@ static int macvlan_broadcast_one_xmit(struct sk_buff *skb,
 {
 	struct net_device *dev = vlan->dev;
 
-	// printk("%s: Entry VLAN id: %#x\n", __func__,
-	// 	skb_vlan_tag_get_id(skb));
+	AMACV_LOG("Entry vlan: %p tag: %#x local: %#x\n", vlan,
+		skb_vlan_tag_get_id(skb), local);
 
 	if (local)
 		return __dev_forward_skb(dev, skb);
@@ -328,13 +361,15 @@ static void macvlan_broadcast(struct sk_buff *skb,
 	int err;
 	unsigned int hash;
 
+	AMACV_LOG("Entry - dev: %p mode: %#x\n", src, mode);
+
 	if (skb->protocol == htons(ETH_P_PAUSE))
 		return;
 
 	hash_for_each_rcu(port->vlan_hash, i, vlan, hlist) {
 		if (vlan->dev == src || !(vlan->mode & mode))
 			continue;
-
+		AMACV_LOG("vlan: %p\n", vlan);
 		hash = mc_hash(vlan, eth->h_dest);
 		if (!test_bit(hash, vlan->mc_filter))
 			continue;
@@ -348,6 +383,7 @@ static void macvlan_broadcast(struct sk_buff *skb,
 		macvlan_count_rx(vlan, skb->len + ETH_HLEN,
 				 err == NET_RX_SUCCESS, true);
 	}
+	AMACV_LOG("Exit - dev: %p mode: %#x\n", src, mode);
 }
 
 static void macvlan_broadcast_xmit(struct sk_buff *skb,
@@ -362,13 +398,15 @@ static void macvlan_broadcast_xmit(struct sk_buff *skb,
 	int err;
 	unsigned int hash;
 
+	AMACV_LOG("Entry - dev: %p mode: %#x\n", src, mode);
+
 	if (skb->protocol == htons(ETH_P_PAUSE))
 		return;
 
 	hash_for_each_rcu(port->vlan_hash, i, vlan, hlist) {
 		if (vlan->dev == src || !(vlan->mode & mode))
 			continue;
-
+		AMACV_LOG("vlan: %p\n", vlan);
 		hash = mc_hash(vlan, eth->h_dest);
 		if (!test_bit(hash, vlan->mc_filter))
 			continue;
@@ -382,6 +420,7 @@ static void macvlan_broadcast_xmit(struct sk_buff *skb,
 		macvlan_count_rx(vlan, skb->len + ETH_HLEN,
 				 err == NET_RX_SUCCESS, true);
 	}
+	AMACV_LOG("Exit - dev: %p mode: %#x\n", src, mode);
 }
 
 static void macvlan_process_broadcast(struct work_struct *w)
@@ -439,6 +478,8 @@ static void macvlan_broadcast_enqueue(struct macvlan_port *port,
 	struct sk_buff *nskb;
 	int err = -ENOMEM;
 
+	AMACV_LOG("Entry - vlan: %p\n", src);
+
 	nskb = skb_clone(skb, GFP_ATOMIC);
 	if (!nskb)
 		goto err;
@@ -474,6 +515,8 @@ static void macvlan_flush_sources(struct macvlan_port *port,
 	struct hlist_node *next;
 	int i;
 
+	AMACV_LOG("Entry - vlan: %p\n", vlan);
+
 	hash_for_each_safe(port->vlan_source_hash, i, next, entry, hlist)
 		if (entry->vlan == vlan)
 			macvlan_hash_del_source(entry);
@@ -489,8 +532,8 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 	int len;
 	int ret;
 
-	// printk("%s: Entry id: %#x\n", __func__,
-	// 	skb_vlan_tag_get_id(skb));
+	AMACV_LOG("Entry vlan: %p tag: %#x\n", vlan,
+		skb_vlan_tag_get_id(skb));
 
 	dev = vlan->dev;
 	if (unlikely(!(dev->flags & IFF_UP)))
@@ -511,9 +554,9 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 	// if (skb->dev->xdp_prog && skb_vlan_tag_present(nskb)) {
 	if (skb_vlan_tag_present(nskb)) {
 		int ret;
-		// printk("%s: present VLAN proto-vid: %04x-%04x\n", __func__,
-		// 	nskb->vlan_proto, skb_vlan_tag_get_id(nskb));
-		// dumpData((u8 *)(skb->data - sizeof(struct ethhdr)), "Before");
+		AMACV_LOG("present VLAN proto-vid: %04x-%04x\n",
+			nskb->vlan_proto, skb_vlan_tag_get_id(nskb));
+		dump_data_bytes((u8 *)(skb->data - sizeof(struct ethhdr)), 24, "fwd_src_one before");
 
 		skb_push(nskb, sizeof(struct ethhdr));
 		skb_reset_mac_header(nskb);
@@ -523,9 +566,9 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 
 		ret = skb_vlan_push(nskb,  nskb->vlan_proto, nskb->vlan_tci);
 		if (ret) {
-			printk("%s: skb_vlan_push ret: %d\n", __func__, ret);
+			AMACV_LOG("skb_vlan_push ret: %d\n", ret);
 		}
-		// dumpData((u8 *)skb->data, "After");
+		dump_data_bytes((u8 *)skb->data, 24, "fwd_src_one after");
 	}
 
 	ret = netif_rx(nskb);
@@ -540,6 +583,8 @@ static bool macvlan_forward_source(struct sk_buff *skb,
 	u32 idx = macvlan_eth_hash(addr);
 	struct hlist_head *h = &port->vlan_source_hash[idx];
 	bool consume = false;
+
+	AMACV_LOG("Entry - idx: %#x\n", idx);
 
 	hlist_for_each_entry_rcu(entry, h, hlist) {
 		if (ether_addr_equal_64bits(entry->addr, addr)) {
@@ -569,8 +614,8 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 	if (unlikely(skb->pkt_type == PACKET_LOOPBACK))
 		return RX_HANDLER_PASS;
 
-	// printk("RxHook VLAN tag present id-proto: %04x-%04x\n", 
-	// 	skb_vlan_tag_get_id(skb), ntohs(skb->protocol));
+	AMACV_LOG("RxHook VLAN tag present id-proto: %04x-%04x\n", 
+		skb_vlan_tag_get_id(skb), ntohs(skb->protocol));
 
 	port = macvlan_port_get_rcu(skb->dev);
 	if (is_multicast_ether_addr(eth->h_dest)) {
@@ -618,6 +663,7 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 		return RX_HANDLER_PASS;
 
 	dev = vlan->dev;
+	AMACV_LOG("vlan: %p dev: %p\n", vlan, dev);
 	if (unlikely(!(dev->flags & IFF_UP))) {
 		kfree_skb(skb);
 		return RX_HANDLER_CONSUMED;
@@ -638,9 +684,9 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 	// if (skb->dev->xdp_prog && skb_vlan_tag_present(skb)) {
 	if (skb_vlan_tag_present(skb)) {
 		int ret;
-		// printk("%s: present VLAN proto-vid: %04x-%04x\n", __func__,
-		// 	skb->vlan_proto, skb_vlan_tag_get_id(skb));
-		// dumpData((u8 *)(skb->data - sizeof(struct ethhdr)), "Before");
+		AMACV_LOG("present VLAN proto-vid: %04x-%04x\n",
+			skb->vlan_proto, skb_vlan_tag_get_id(skb));
+		dump_data_bytes((u8 *)(skb->data - sizeof(struct ethhdr)), 24, "hdl_frame before");
 
 		skb_push(skb, sizeof(struct ethhdr));
 		skb_reset_mac_header(skb);
@@ -650,9 +696,9 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 
 		ret = skb_vlan_push(skb,  skb->vlan_proto, skb->vlan_tci);
 		if (ret) {
-			printk("%s: skb_vlan_push ret: %d\n", __func__, ret);
+			AMACV_LOG("skb_vlan_push ret: %d\n", ret);
 		}
-		// dumpData((u8 *)skb->data, "After");
+		dump_data_bytes((u8 *)skb->data, 24, "hdl_frame after");
 	}
 
 	ret = NET_RX_SUCCESS;
@@ -668,6 +714,9 @@ static int macvlan_queue_xmit(struct sk_buff *skb, struct net_device *dev)
 	const struct macvlan_port *port = vlan->port;
 	const struct macvlan_dev *dest;
 
+	AMACV_LOG("Entry - dev: %p vlan: %p mode: %#x\n",
+		dev, vlan, vlan->mode);
+
 	if (vlan->mode == MACVLAN_MODE_BRIDGE) {
 		const struct ethhdr *eth = skb_eth_hdr(skb);
 
@@ -678,14 +727,14 @@ static int macvlan_queue_xmit(struct sk_buff *skb, struct net_device *dev)
 			skb_reset_network_header(skb);
 			if (!skb_transport_header_was_set(skb))
 				skb_reset_transport_header(skb);
-			// printk("%s: Bridge & Multicast\n", __func__);
+			AMACV_LOG("Mode: Bridge & Multicast\n");
 			macvlan_broadcast_xmit(skb, port, dev, MACVLAN_MODE_BRIDGE);
 			goto xmit_world;
 		}
 
 		dest = macvlan_hash_lookup(port, eth->h_dest);
 		if (dest && dest->mode == MACVLAN_MODE_BRIDGE) {
-			// printk("%s: Dst dev Bridge\n", __func__);
+			AMACV_LOG("Dst dev Bridge mode\n");
 			/* send to lowerdev first for its network taps */
 			dev_forward_skb(vlan->lowerdev, skb);
 			return NET_XMIT_SUCCESS;
@@ -697,8 +746,8 @@ xmit_world:
 	skb_reset_network_header(skb);
 	if (!skb_transport_header_was_set(skb))
 		skb_reset_transport_header(skb);
-	// printk("%s: Xmit world skb->proto: 0x%04x\n", __func__,
-	// 	skb->protocol);
+	AMACV_LOG("Xmit world skb->proto: 0x%04x\n",
+	 	skb->protocol);
 	return dev_queue_xmit_accel(skb,
 				    netdev_get_sb_channel(dev) ? dev : NULL);
 }
@@ -719,10 +768,12 @@ static netdev_tx_t macvlan_start_xmit(struct sk_buff *skb,
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	unsigned int len = skb->len;
 	int ret;
+	
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
 
-	// printk("%s: Entry skb->proto: 0x%04x\n", __func__, skb->protocol);
+	AMACV_LOG("skb->proto: 0x%04x\n", skb->protocol);
 	if (unlikely(netpoll_tx_running(dev))) {
-		//printk("%s: netpoll tx not running\n", __func__);
+		AMACV_LOG("netpoll tx not running\n");
 		return macvlan_netpoll_send_skb(vlan, skb);
 	}
 
@@ -749,6 +800,8 @@ static int macvlan_hard_header(struct sk_buff *skb, struct net_device *dev,
 	const struct macvlan_dev *vlan = netdev_priv(dev);
 	struct net_device *lowerdev = vlan->lowerdev;
 
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
+
 	return dev_hard_header(skb, lowerdev, type, daddr,
 			       saddr ? : dev->dev_addr, len);
 }
@@ -765,6 +818,8 @@ static int macvlan_open(struct net_device *dev)
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	struct net_device *lowerdev = vlan->lowerdev;
 	int err;
+
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
 
 	if (macvlan_passthru(vlan->port)) {
 		if (!(vlan->flags & MACVLAN_FLAG_NOPROMISC)) {
@@ -810,8 +865,8 @@ static int macvlan_open(struct net_device *dev)
 
 hash_add:
 	macvlan_hash_add(vlan);
+	AMACV_LOG("Exit - dev: %p vlan: %p\n", dev, vlan);
 	return 0;
-
 clear_multi:
 	if (dev->flags & IFF_ALLMULTI)
 		dev_set_allmulti(lowerdev, -1);
@@ -831,6 +886,8 @@ static int macvlan_stop(struct net_device *dev)
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	struct net_device *lowerdev = vlan->lowerdev;
+
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
 
 	if (vlan->accel_priv) {
 		lowerdev->netdev_ops->ndo_dfwd_del_station(lowerdev,
@@ -867,6 +924,8 @@ static int macvlan_sync_address(struct net_device *dev, unsigned char *addr)
 	struct macvlan_port *port = vlan->port;
 	int err;
 
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
+
 	if (!(dev->flags & IFF_UP)) {
 		/* Just copy in the new address */
 		ether_addr_copy(dev->dev_addr, addr);
@@ -902,6 +961,8 @@ static int macvlan_set_mac_address(struct net_device *dev, void *p)
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	struct sockaddr *addr = p;
 
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
+
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
 
@@ -925,6 +986,8 @@ static void macvlan_change_rx_flags(struct net_device *dev, int change)
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	struct net_device *lowerdev = vlan->lowerdev;
 
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
+
 	if (dev->flags & IFF_UP) {
 		if (change & IFF_ALLMULTI)
 			dev_set_allmulti(lowerdev, dev->flags & IFF_ALLMULTI ? 1 : -1);
@@ -939,6 +1002,8 @@ static void macvlan_compute_filter(unsigned long *mc_filter,
 				   struct net_device *dev,
 				   struct macvlan_dev *vlan)
 {
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
+
 	if (dev->flags & (IFF_PROMISC | IFF_ALLMULTI)) {
 		bitmap_fill(mc_filter, MACVLAN_MC_FILTER_SZ);
 	} else {
@@ -959,6 +1024,8 @@ static void macvlan_compute_filter(unsigned long *mc_filter,
 static void macvlan_set_mac_lists(struct net_device *dev)
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
+
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
 
 	macvlan_compute_filter(vlan->mc_filter, dev, vlan);
 
@@ -985,6 +1052,8 @@ static int macvlan_change_mtu(struct net_device *dev, int new_mtu)
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
 
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
+
 	if (vlan->lowerdev->mtu < new_mtu)
 		return -EINVAL;
 	dev->mtu = new_mtu;
@@ -997,6 +1066,8 @@ static int macvlan_eth_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	const struct net_device_ops *ops = real_dev->netdev_ops;
 	struct ifreq ifrr;
 	int err = -EOPNOTSUPP;
+
+	AMACV_LOG("Entry - dev: %p\n", dev);
 
 	strscpy(ifrr.ifr_name, real_dev->name, IFNAMSIZ);
 	ifrr.ifr_ifru = ifr->ifr_ifru;
@@ -1053,6 +1124,8 @@ static int macvlan_init(struct net_device *dev)
 	const struct net_device *lowerdev = vlan->lowerdev;
 	struct macvlan_port *port = vlan->port;
 
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
+
 	dev->state		= (dev->state & ~MACVLAN_STATE_MASK) |
 				  (lowerdev->state & MACVLAN_STATE_MASK);
 	dev->features 		= lowerdev->features & MACVLAN_FEATURES;
@@ -1079,6 +1152,8 @@ static void macvlan_uninit(struct net_device *dev)
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	struct macvlan_port *port = vlan->port;
+
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
 
 	free_percpu(vlan->pcpu_stats);
 
@@ -1134,6 +1209,8 @@ static int macvlan_vlan_rx_add_vid(struct net_device *dev,
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	struct net_device *lowerdev = vlan->lowerdev;
 
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
+
 	return vlan_vid_add(lowerdev, proto, vid);
 }
 
@@ -1142,6 +1219,8 @@ static int macvlan_vlan_rx_kill_vid(struct net_device *dev,
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	struct net_device *lowerdev = vlan->lowerdev;
+
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
 
 	vlan_vid_del(lowerdev, proto, vid);
 	return 0;
@@ -1155,6 +1234,8 @@ static int macvlan_fdb_add(struct ndmsg *ndm, struct nlattr *tb[],
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	int err = -EINVAL;
+
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
 
 	/* Support unicast filter only on passthru devices.
 	 * Multicast filter should be allowed on all devices.
@@ -1180,6 +1261,8 @@ static int macvlan_fdb_del(struct ndmsg *ndm, struct nlattr *tb[],
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	int err = -EINVAL;
 
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
+
 	/* Support unicast filter only on passthru devices.
 	 * Multicast filter should be allowed on all devices.
 	 */
@@ -1197,6 +1280,8 @@ static int macvlan_fdb_del(struct ndmsg *ndm, struct nlattr *tb[],
 static void macvlan_ethtool_get_drvinfo(struct net_device *dev,
 					struct ethtool_drvinfo *drvinfo)
 {
+	AMACV_LOG("Entry - dev: %p\n", dev);
+
 	strlcpy(drvinfo->driver, "macvlan", sizeof(drvinfo->driver));
 	strlcpy(drvinfo->version, "0.1", sizeof(drvinfo->version));
 }
@@ -1205,6 +1290,8 @@ static int macvlan_ethtool_get_link_ksettings(struct net_device *dev,
 					      struct ethtool_link_ksettings *cmd)
 {
 	const struct macvlan_dev *vlan = netdev_priv(dev);
+
+	AMACV_LOG("Entry - dev: %p\n", dev);
 
 	return __ethtool_get_link_ksettings(vlan->lowerdev, cmd);
 }
@@ -1215,6 +1302,8 @@ static int macvlan_ethtool_get_ts_info(struct net_device *dev,
 	struct net_device *real_dev = macvlan_dev_real_dev(dev);
 	const struct ethtool_ops *ops = real_dev->ethtool_ops;
 	struct phy_device *phydev = real_dev->phydev;
+
+	AMACV_LOG("Entry - dev: %p\n", dev);
 
 	if (phy_has_tsinfo(phydev)) {
 		return phy_ts_info(phydev, info);
@@ -1236,6 +1325,8 @@ static netdev_features_t macvlan_fix_features(struct net_device *dev,
 	netdev_features_t lowerdev_features = vlan->lowerdev->features;
 	netdev_features_t mask;
 
+	AMACV_LOG("Entry - dev: %p\n", dev);
+
 	features |= NETIF_F_ALL_FOR_ALL;
 	features &= (vlan->set_features | ~MACVLAN_FEATURES);
 	mask = features;
@@ -1251,6 +1342,7 @@ static netdev_features_t macvlan_fix_features(struct net_device *dev,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 static void macvlan_dev_poll_controller(struct net_device *dev)
 {
+	AMACV_LOG("Entry - dev: %p\n", dev);
 	return;
 }
 
@@ -1260,6 +1352,8 @@ static int macvlan_dev_netpoll_setup(struct net_device *dev, struct netpoll_info
 	struct net_device *real_dev = vlan->lowerdev;
 	struct netpoll *netpoll;
 	int err;
+	
+	AMACV_LOG("Entry - dev: %p\n", dev);
 
 	netpoll = kzalloc(sizeof(*netpoll), GFP_KERNEL);
 	err = -ENOMEM;
@@ -1282,6 +1376,8 @@ static void macvlan_dev_netpoll_cleanup(struct net_device *dev)
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	struct netpoll *netpoll = vlan->netpoll;
+
+	AMACV_LOG("Entry - dev: %p\n", dev);
 
 	if (!netpoll)
 		return;
@@ -1337,6 +1433,8 @@ static const struct net_device_ops macvlan_netdev_ops = {
 
 void macvlan_common_setup(struct net_device *dev)
 {
+	AMACV_LOG("Entry - dev: %p\n", dev);
+
 	ether_setup(dev);
 
 	dev->min_mtu		= 0;
@@ -1353,8 +1451,10 @@ EXPORT_SYMBOL_GPL(macvlan_common_setup);
 
 static void macvlan_setup(struct net_device *dev)
 {
+	AMACV_LOG("Entry - dev: %p\n", dev);
 	macvlan_common_setup(dev);
 	dev->priv_flags |= IFF_NO_QUEUE;
+	AMACV_LOG("Exit - dev: %p\n", dev);
 }
 
 static int macvlan_port_create(struct net_device *dev)
@@ -1362,6 +1462,8 @@ static int macvlan_port_create(struct net_device *dev)
 	struct macvlan_port *port;
 	unsigned int i;
 	int err;
+
+	AMACV_LOG("Entry - dev: %p\n", dev);
 
 	if (dev->type != ARPHRD_ETHER || dev->flags & IFF_LOOPBACK)
 		return -EINVAL;
@@ -1397,6 +1499,8 @@ static void macvlan_port_destroy(struct net_device *dev)
 {
 	struct macvlan_port *port = macvlan_port_get_rtnl(dev);
 	struct sk_buff *skb;
+
+	AMACV_LOG("Entry - dev: %p\n", dev);
 
 	dev->priv_flags &= ~IFF_MACVLAN_PORT;
 	netdev_rx_handler_unregister(dev);
@@ -1435,6 +1539,8 @@ static int macvlan_validate(struct nlattr *tb[], struct nlattr *data[],
 {
 	struct nlattr *nla, *head;
 	int rem, len;
+
+	AMACV_LOG("Entry\n");
 
 	if (tb[IFLA_ADDRESS]) {
 		if (nla_len(tb[IFLA_ADDRESS]) != ETH_ALEN)
@@ -1518,6 +1624,8 @@ static int macvlan_changelink_sources(struct macvlan_dev *vlan, u32 mode,
 	struct nlattr *nla, *head;
 	struct macvlan_source_entry *entry;
 
+	AMACV_LOG("Entry - vlandev: %p mode: %#x\n", vlan, mode);
+
 	if (data[IFLA_MACVLAN_MACADDR])
 		addr = nla_data(data[IFLA_MACVLAN_MACADDR]);
 
@@ -1562,7 +1670,7 @@ static int macvlan_changelink_sources(struct macvlan_dev *vlan, u32 mode,
 	} else {
 		return -EINVAL;
 	}
-
+	AMACV_LOG("Exit - vlandev: %p mode: %#x\n", vlan, mode);
 	return 0;
 }
 
@@ -1577,12 +1685,16 @@ int macvlan_common_newlink(struct net *src_net, struct net_device *dev,
 	int macmode;
 	bool create = false;
 
+	AMACV_LOG("Entry - dev: %p vlan: %p\n", dev, vlan);
+
 	if (!tb[IFLA_LINK])
 		return -EINVAL;
 
 	lowerdev = __dev_get_by_index(src_net, nla_get_u32(tb[IFLA_LINK]));
 	if (lowerdev == NULL)
 		return -ENODEV;
+
+	AMACV_LOG("lowerdev: %p\n", lowerdev);
 
 	/* When creating macvlans or macvtaps on top of other macvlans - use
 	 * the real device as the lowerdev.
@@ -1609,6 +1721,7 @@ int macvlan_common_newlink(struct net *src_net, struct net_device *dev,
 		create = true;
 	}
 	port = macvlan_port_get_rtnl(lowerdev);
+	AMACV_LOG("vlan port: %p\n", port);
 
 	/* Only 1 macvlan device can be created in passthru mode */
 	if (macvlan_passthru(port)) {
@@ -1627,6 +1740,7 @@ int macvlan_common_newlink(struct net *src_net, struct net_device *dev,
 	vlan->mode     = MACVLAN_MODE_VEPA;
 	if (data && data[IFLA_MACVLAN_MODE])
 		vlan->mode = nla_get_u32(data[IFLA_MACVLAN_MODE]);
+	AMACV_LOG("vlan mode: %#x\n", vlan->mode);
 
 	if (data && data[IFLA_MACVLAN_FLAGS])
 		vlan->flags = nla_get_u16(data[IFLA_MACVLAN_FLAGS]);
@@ -1646,6 +1760,7 @@ int macvlan_common_newlink(struct net *src_net, struct net_device *dev,
 			goto destroy_macvlan_port;
 		}
 		macmode = nla_get_u32(data[IFLA_MACVLAN_MACADDR_MODE]);
+		AMACV_LOG("vlan macmode: %#x\n", macmode);
 		err = macvlan_changelink_sources(vlan, macmode, data);
 		if (err)
 			goto destroy_macvlan_port;
@@ -1668,12 +1783,12 @@ int macvlan_common_newlink(struct net *src_net, struct net_device *dev,
 	update_port_bc_queue_len(vlan->port);
 	netif_stacked_transfer_operstate(lowerdev, dev);
 	linkwatch_fire_event(dev);
-
+	AMACV_LOG("Exit - dev: %p\n", dev);
 	return 0;
-
 unregister_netdev:
 	/* macvlan_uninit would free the macvlan port */
 	unregister_netdevice(dev);
+	AMACV_LOG("Exit - Failed to set upper dev: %p\n", dev);
 	return err;
 destroy_macvlan_port:
 	/* the macvlan port may be freed by macvlan_uninit when fail to register.
@@ -1683,6 +1798,7 @@ destroy_macvlan_port:
 		macvlan_flush_sources(port, vlan);
 		macvlan_port_destroy(port->dev);
 	}
+	AMACV_LOG("Exit - Failed to register dev: %p\n", dev);
 	return err;
 }
 EXPORT_SYMBOL_GPL(macvlan_common_newlink);
@@ -1691,12 +1807,15 @@ static int macvlan_newlink(struct net *src_net, struct net_device *dev,
 			   struct nlattr *tb[], struct nlattr *data[],
 			   struct netlink_ext_ack *extack)
 {
+	AMACV_LOG("Entry - dev: %p\n", dev);
 	return macvlan_common_newlink(src_net, dev, tb, data, extack);
 }
 
 void macvlan_dellink(struct net_device *dev, struct list_head *head)
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
+
+	AMACV_LOG("Entry - dev: %p\n", dev);
 
 	if (vlan->mode == MACVLAN_MODE_SOURCE)
 		macvlan_flush_sources(vlan->port, vlan);
@@ -1717,6 +1836,8 @@ static int macvlan_changelink(struct net_device *dev,
 	enum macvlan_macaddr_mode macmode;
 	int ret;
 
+	AMACV_LOG("Entry - dev: %p\n", dev);
+
 	/* Validate mode, but don't set yet: setting flags may fail. */
 	if (data && data[IFLA_MACVLAN_MODE]) {
 		set_mode = true;
@@ -1728,6 +1849,7 @@ static int macvlan_changelink(struct net_device *dev,
 		if (vlan->mode == MACVLAN_MODE_SOURCE &&
 		    vlan->mode != mode)
 			macvlan_flush_sources(vlan->port, vlan);
+		AMACV_LOG("vlan mod: %#x\n", mode);
 	}
 
 	if (data && data[IFLA_MACVLAN_FLAGS]) {
@@ -1744,11 +1866,13 @@ static int macvlan_changelink(struct net_device *dev,
 				return err;
 		}
 		vlan->flags = flags;
+		AMACV_LOG("vlan flags: %#x\n", mode);
 	}
 
 	if (data && data[IFLA_MACVLAN_BC_QUEUE_LEN]) {
 		vlan->bc_queue_len_req = nla_get_u32(data[IFLA_MACVLAN_BC_QUEUE_LEN]);
 		update_port_bc_queue_len(vlan->port);
+		AMACV_LOG("vlan qlen: %#x\n", vlan->bc_queue_len_req);
 	}
 
 	if (set_mode)
@@ -1760,6 +1884,7 @@ static int macvlan_changelink(struct net_device *dev,
 		ret = macvlan_changelink_sources(vlan, macmode, data);
 		if (ret)
 			return ret;
+		AMACV_LOG("vlan macmode: %#x\n", macmode);
 	}
 	return 0;
 }
@@ -1792,7 +1917,9 @@ static int macvlan_fill_info_macaddr(struct sk_buff *skb,
 {
 	struct hlist_head *h = &vlan->port->vlan_source_hash[i];
 	struct macvlan_source_entry *entry;
-
+	
+	AMACV_LOG("Entry\n");
+	
 	hlist_for_each_entry_rcu(entry, h, hlist) {
 		if (entry->vlan != vlan)
 			continue;
@@ -1809,6 +1936,8 @@ static int macvlan_fill_info(struct sk_buff *skb,
 	struct macvlan_port *port = vlan->port;
 	int i;
 	struct nlattr *nest;
+
+	AMACV_LOG("Entry\n");
 
 	if (nla_put_u32(skb, IFLA_MACVLAN_MODE, vlan->mode))
 		goto nla_put_failure;
@@ -1831,6 +1960,7 @@ static int macvlan_fill_info(struct sk_buff *skb,
 		goto nla_put_failure;
 	if (nla_put_u32(skb, IFLA_MACVLAN_BC_QUEUE_LEN_USED, port->bc_queue_len_used))
 		goto nla_put_failure;
+	AMACV_LOG("Exit\n");
 	return 0;
 
 nla_put_failure:
@@ -1850,6 +1980,7 @@ static const struct nla_policy macvlan_policy[IFLA_MACVLAN_MAX + 1] = {
 
 int macvlan_link_register(struct rtnl_link_ops *ops)
 {
+	AMACV_LOG("Entry\n");
 	/* common fields */
 	ops->validate		= macvlan_validate;
 	ops->maxtype		= IFLA_MACVLAN_MAX;
@@ -1881,6 +2012,8 @@ static void update_port_bc_queue_len(struct macvlan_port *port)
 	u32 max_bc_queue_len_req = 0;
 	struct macvlan_dev *vlan;
 
+	AMACV_LOG("Entry\n");
+
 	list_for_each_entry(vlan, &port->vlans, list) {
 		if (vlan->bc_queue_len_req > max_bc_queue_len_req)
 			max_bc_queue_len_req = vlan->bc_queue_len_req;
@@ -1896,8 +2029,12 @@ static int macvlan_device_event(struct notifier_block *unused,
 	struct macvlan_port *port;
 	LIST_HEAD(list_kill);
 
-	if (!netif_is_macvlan_port(dev))
+	AMACV_LOG("Entry - event: %#lx\n", event);
+
+	if (!netif_is_macvlan_port(dev)) {
+		AMACV_LOG("Entry - Not a macvlan port\n");
 		return NOTIFY_DONE;
+	}
 
 	port = macvlan_port_get_rtnl(dev);
 
@@ -1971,7 +2108,7 @@ static int __init macvlan_init_module(void)
 	err = macvlan_link_register(&macvlan_link_ops);
 	if (err < 0)
 		goto err1;
-	printk("Macvlan driver %s Initialzied\n", ATAYA_VER_STR);
+	printk("Ataya macvlan driver %s Initialzied\n", ATAYA_VER_STR);
 	return 0;
 err1:
 	unregister_netdevice_notifier(&macvlan_notifier_block);
@@ -1982,7 +2119,7 @@ static void __exit macvlan_cleanup_module(void)
 {
 	rtnl_link_unregister(&macvlan_link_ops);
 	unregister_netdevice_notifier(&macvlan_notifier_block);
-	printk("Macvlan driver %s De-Initialzied\n", ATAYA_VER_STR);
+	printk("Ataya macvlan driver %s De-Initialzied\n", ATAYA_VER_STR);
 }
 
 module_init(macvlan_init_module);
