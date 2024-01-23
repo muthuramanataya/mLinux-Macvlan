@@ -278,28 +278,29 @@ static int macvlan_broadcast_one(struct sk_buff *skb,
 {
 	struct net_device *dev = vlan->dev;
 
-	// Ataya
 	AMACV_LOG("Entry - vlan: %p tag: %#x local: %#x\n", vlan,
 		skb_vlan_tag_get_id(skb), local);
 
+	// Ataya
 	//if (skb->dev->xdp_prog && skb_vlan_tag_present(skb)) {
 	if (skb_vlan_tag_present(skb)) {
 		int ret;
 		AMACV_LOG("present VLAN proto-vid: %04x-%04x\n",
 			skb->vlan_proto, skb_vlan_tag_get_id(skb));
-		dump_data_bytes((u8 *)(skb->data - sizeof(struct ethhdr)), 24, "bcast_one before");
-
-		skb_push(skb, sizeof(struct ethhdr));
-		skb_reset_mac_header(skb);
+		dump_data_bytes((u8 *)skb->data, 16, "bcast_one before");
+		
 		skb_reset_network_header(skb);
 		if (!skb_transport_header_was_set(skb))
 			skb_reset_transport_header(skb);
+
+		skb_push(skb, sizeof(struct ethhdr));
+		skb_reset_mac_header(skb); 
 
 		ret = skb_vlan_push(skb,  skb->vlan_proto, skb->vlan_tci);
 		if (ret) {
 			AMACV_LOG("skb_vlan_push ret: %d\n", ret);
 		}
-		dump_data_bytes((u8 *)skb->data, 24, "bcast_one After");
+		dump_data_bytes((u8 *)skb->data, 16, "bcast_one After");
 	}
 
 	if (local)
@@ -557,20 +558,21 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 		int ret;
 		AMACV_LOG("present VLAN proto-vid: %04x-%04x\n",
 			nskb->vlan_proto, skb_vlan_tag_get_id(nskb));
-		dump_data_bytes((u8 *)(skb->data - sizeof(struct ethhdr)), 24,
+		dump_data_bytes((u8 *)skb->data, 16,
 			"fwd_src_one before");
 
-		skb_push(nskb, sizeof(struct ethhdr));
-		skb_reset_mac_header(nskb);
 		skb_reset_network_header(nskb);
 		if (!skb_transport_header_was_set(nskb))
 			skb_reset_transport_header(nskb);
+
+		skb_push(nskb, sizeof(struct ethhdr));
+		skb_reset_mac_header(nskb);
 
 		ret = skb_vlan_push(nskb,  nskb->vlan_proto, nskb->vlan_tci);
 		if (ret) {
 			AMACV_LOG("skb_vlan_push ret: %d\n", ret);
 		}
-		dump_data_bytes((u8 *)skb->data, 24, "fwd_src_one after");
+		dump_data_bytes((u8 *)skb->data, 16, "fwd_src_one after");
 	}
 
 	ret = netif_rx(nskb);
@@ -708,19 +710,20 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 		int ret;
 		AMACV_LOG("present VLAN proto-vid: %04x-%04x\n",
 			skb->vlan_proto, skb_vlan_tag_get_id(skb));
-		dump_data_bytes((u8 *)(skb->data - sizeof(struct ethhdr)), 24, "hdl_frame before");
+		dump_data_bytes((u8 *) skb->data, 16, "hdl_frame before");
 
-		skb_push(skb, sizeof(struct ethhdr));
-		skb_reset_mac_header(skb);
 		skb_reset_network_header(skb);
 		if (!skb_transport_header_was_set(skb))
 			skb_reset_transport_header(skb);
+
+		skb_push(skb, sizeof(struct ethhdr));
+		skb_reset_mac_header(skb);
 
 		ret = skb_vlan_push(skb,  skb->vlan_proto, skb->vlan_tci);
 		if (ret) {
 			AMACV_LOG("skb_vlan_push ret: %d\n", ret);
 		}
-		dump_data_bytes((u8 *)skb->data, 24, "hdl_frame after");
+		dump_data_bytes((u8 *)skb->data, 16, "hdl_frame after");
 	}
 
 	ret = NET_RX_SUCCESS;
