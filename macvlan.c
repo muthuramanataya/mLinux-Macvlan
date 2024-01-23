@@ -195,10 +195,10 @@ static void macvlan_hash_add(struct macvlan_dev *vlan)
 	struct macvlan_port *port = vlan->port;
 	const unsigned char *addr = vlan->dev->dev_addr;
 	u32 idx = macvlan_eth_hash(addr);
-	u64 value = get_unaligned((u64 *)addr);
 
-	AMACV_LOG("Entry - vlan: %p idx: %#x addr: %#llx\n", vlan,
-		idx, value);
+	AMACV_LOG("Entry - vlan: %p dev: %s-%p idx: %#x addr: %#llx\n",
+		vlan, vlan->dev->name, vlan->dev, idx,
+		get_unaligned((u64 *)addr));
 
 	hlist_add_head_rcu(&vlan->hlist, &port->vlan_hash[idx]);
 }
@@ -533,8 +533,8 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 	int len;
 	int ret;
 
-	AMACV_LOG("Entry vlan: %p tag: %#x\n", vlan,
-		skb_vlan_tag_get_id(skb));
+	AMACV_LOG("Entry vlan: %p dev: %s-%p tag: %#x\n", vlan,
+		vlan->dev->name, vlan->dev, skb_vlan_tag_get_id(skb));
 
 	dev = vlan->dev;
 	if (unlikely(!(dev->flags & IFF_UP)))
@@ -557,7 +557,8 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 		int ret;
 		AMACV_LOG("present VLAN proto-vid: %04x-%04x\n",
 			nskb->vlan_proto, skb_vlan_tag_get_id(nskb));
-		dump_data_bytes((u8 *)(skb->data - sizeof(struct ethhdr)), 24, "fwd_src_one before");
+		dump_data_bytes((u8 *)(skb->data - sizeof(struct ethhdr)), 24,
+			"fwd_src_one before");
 
 		skb_push(nskb, sizeof(struct ethhdr));
 		skb_reset_mac_header(nskb);
@@ -573,7 +574,10 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 	}
 
 	ret = netif_rx(nskb);
+	// What will happen if nskb queueing failed? Do i need to release nskb?
 	macvlan_count_rx(vlan, len, ret == NET_RX_SUCCESS, false);
+	AMACV_LOG("Entry vlan: %p dev: %s-%p pkt_type: %#x\n", vlan,
+		vlan->dev->name, vlan->dev, nskb->pkt_type);
 }
 
 static bool macvlan_forward_source(struct sk_buff *skb,
@@ -585,16 +589,21 @@ static bool macvlan_forward_source(struct sk_buff *skb,
 	struct hlist_head *h = &port->vlan_source_hash[idx];
 	bool consume = false;
 
-	AMACV_LOG("Entry - idx: %#x\n", idx);
+	AMACV_LOG("Entry - idx: %#x addr: %#llx\n", idx,
+		*(const u64 *) addr);
 
 	hlist_for_each_entry_rcu(entry, h, hlist) {
+		AMACV_LOG("src entry addr: %#llx\n", *(const u64 *) entry->addr);
 		if (ether_addr_equal_64bits(entry->addr, addr)) {
-			if (entry->vlan->flags & MACVLAN_FLAG_NODST)
+			if (entry->vlan->flags & MACVLAN_FLAG_NODST) {
+				AMACV_LOG("src entry - vlan: %p dev: %s-%p\n",
+					entry->vlan, entry->vlan->dev->name, entry->vlan->dev);
 				consume = true;
+			}
 			macvlan_forward_source_one(skb, entry->vlan);
 		}
 	}
-
+	AMACV_LOG("Exit - idx: %#x consume: %d\n", idx, consume);
 	return consume;
 }
 
@@ -615,13 +624,18 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 	if (unlikely(skb->pkt_type == PACKET_LOOPBACK))
 		return RX_HANDLER_PASS;
 
-	AMACV_LOG("RxHook VLAN tag present id-proto: %04x-%04x\n", 
-		skb_vlan_tag_get_id(skb), ntohs(skb->protocol));
+	AMACV_LOG("RxHook skb: %p dev: %s-%p vlanid-proto: %04x-%04x\n", 
+		skb, skb->dev->name, skb->dev, skb_vlan_tag_get_id(skb), 
+		ntohs(skb->protocol));
+	AMACV_LOG("ether src: %#llx dst: %#llx\n",
+			*(const u64 *)eth->h_source, *(const u64 *)eth->h_dest);
+	dump_data_bytes((u8 *) skb->data, 16, "hdl_frame entry");
 
 	port = macvlan_port_get_rcu(skb->dev);
 	if (is_multicast_ether_addr(eth->h_dest)) {
 		unsigned int hash;
-
+		AMACV_LOG("Multicast ether dst: %#llx\n",
+			*(const u64 *)eth->h_dest);
 		skb = ip_check_defrag(dev_net(skb->dev), skb, IP_DEFRAG_MACVLAN);
 		if (!skb)
 			return RX_HANDLER_CONSUMED;
@@ -636,6 +650,8 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 		    src->mode != MACVLAN_MODE_BRIDGE) {
 			/* forward to original port. */
 			vlan = src;
+			AMACV_LOG("mcast eth src lookup vlan mode: %#x\n",
+				vlan->mode);
 			// In macvlan_broadcast_one(), we embed the VLAN header
 			// information even it got failed because netif_rx called
 			// here.
@@ -647,25 +663,30 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 		hash = mc_hash(NULL, eth->h_dest);
 		if (test_bit(hash, port->mc_filter))
 			macvlan_broadcast_enqueue(port, src, skb);
-
+		AMACV_LOG("Multicast return _PASS\n");
 		return RX_HANDLER_PASS;
 	}
 
 	if (macvlan_forward_source(skb, port, eth->h_source)) {
+		AMACV_LOG("Failed to foward based on src\n");
 		kfree_skb(skb);
 		return RX_HANDLER_CONSUMED;
 	}
+
 	if (macvlan_passthru(port))
 		vlan = list_first_or_null_rcu(&port->vlans,
 					      struct macvlan_dev, list);
 	else
 		vlan = macvlan_hash_lookup(port, eth->h_dest);
-	if (!vlan || vlan->mode == MACVLAN_MODE_SOURCE)
+	if (!vlan || vlan->mode == MACVLAN_MODE_SOURCE) {
+		AMACV_LOG("Return _PASS vlan: %p or mode source\n", vlan);
 		return RX_HANDLER_PASS;
+	}
 
 	dev = vlan->dev;
 	AMACV_LOG("vlan: %p dev: %p\n", vlan, dev);
 	if (unlikely(!(dev->flags & IFF_UP))) {
+		AMACV_LOG("Return dev: %p vlan: %p not iff_up\n", dev, vlan);
 		kfree_skb(skb);
 		return RX_HANDLER_CONSUMED;
 	}
@@ -706,6 +727,8 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 	handle_res = RX_HANDLER_ANOTHER;
 out:
 	macvlan_count_rx(vlan, len, ret == NET_RX_SUCCESS, false);
+	AMACV_LOG("Exit: skb: %p dev: %s-%p res: %#x\n", skb,
+		skb->dev->name, skb->dev, handle_res);
 	return handle_res;
 }
 
