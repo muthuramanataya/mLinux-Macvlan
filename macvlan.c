@@ -40,8 +40,8 @@
 #define MACVLAN_F_PASSTHRU		1
 #define MACVLAN_F_ADDRCHANGE	2
 
-#define DRV_VERSION 	"0.0.4"
-#define ATAYA_VER_STR	"Ataya-v0.0.4"
+#define DRV_VERSION 	"0.0.3"
+#define ATAYA_VER_STR	"Ataya-v0.0.3"
 
 #ifdef ATAYA_MACVLAN_DBG
 #define DBG(fmt, args...) do {      \
@@ -255,7 +255,8 @@ static inline void dump_data_bytes(u8 *buf, u16 len, char *dump_str)
     u16 i, n;
     char str[512], *strp;
 
-    AMACV_LOG("Dump Data of: %s\n", dump_str);
+    AMACV_LOG("Dump Data of: %s - %p\n",
+		dump_str, buf);
 
 	if (!buf)
 		return;
@@ -280,7 +281,20 @@ static inline void dump_skb_hdrs(struct sk_buff *skb)
 
 	if (!skb)
 		return;
-		
+
+	AMACV_LOG("skb L: %#x DL: %#x ML: %#x HL: %#x TSz: %#x\n",
+		skb->len, skb->data_len, skb->mac_len, skb->hdr_len,
+		skb->truesize);
+#ifdef NET_SKBUFF_DATA_USES_OFFSET
+	AMACV_LOG("skb H: %p D: %p TOff: %#x EOff: %#x\n",
+		skb->head, skb->data, skb->tail, skb->end);
+#else
+	AMACV_LOG("skb H: %p D: %p T: %p E: %p\n",
+		skb->head, skb->data, skb->tail, skb->end);
+#endif
+	AMACV_LOG("skb L2: %#x L3: %#x L4: %#x\n",
+		skb->mac_header, skb->network_header, skb->transport_header);
+
 	eth = eth_hdr(skb);
 	dump_data_bytes((u8 *) eth, sizeof(*eth), "ethhdr");
 	
@@ -314,12 +328,12 @@ static int macvlan_broadcast_one(struct sk_buff *skb,
 		skb_vlan_tag_get_id(skb), local);
 
 	// Ataya
-	//if (skb->dev->xdp_prog && skb_vlan_tag_present(skb)) {
-	if (skb_vlan_tag_present(skb)) {
+	// The macvlan_dev will hold the N2, N3, N6, or other macvlan device
+	if (strstr(dev->name, "xdp") && skb_vlan_tag_present(skb)) {
 		int ret;
 		AMACV_LOG("present VLAN proto-vid: %04x-%04x\n",
 			skb->vlan_proto, skb_vlan_tag_get_id(skb));
-			
+		dump_skb_hdrs(skb);
 		skb_reset_network_header(skb);
 		if (!skb_transport_header_was_set(skb))
 			skb_reset_transport_header(skb);
@@ -589,13 +603,12 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 		nskb->pkt_type = PACKET_HOST;
 
 	// Ataya
-	// Muthu - Re-added the striped vlan tag into sk_buff
-	// if (skb->dev->xdp_prog && skb_vlan_tag_present(nskb)) {
-	if (skb_vlan_tag_present(nskb)) {
+	// macvlan_dev will hold the N2, N3, N6, or other macvlan device
+	if (strstr(dev->name, "xdp") && skb_vlan_tag_present(nskb)) {
 		int ret;
 		AMACV_LOG("present VLAN proto-vid: %04x-%04x\n",
 			nskb->vlan_proto, skb_vlan_tag_get_id(nskb));
-	
+		dump_skb_hdrs(nskb);
 		skb_reset_network_header(nskb);
 		if (!skb_transport_header_was_set(nskb))
 			skb_reset_transport_header(nskb);
@@ -607,7 +620,7 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 		if (ret) {
 			AMACV_LOG("skb_vlan_push ret: %d\n", ret);
 		}
-		dump_skb_hdrs(skb);
+		dump_skb_hdrs(nskb);
 	}
 
 	ret = netif_rx(nskb);
@@ -688,12 +701,12 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 			vlan = src;
 			AMACV_LOG("mcast eth src lookup vlan mode: %#x\n",
 				vlan->mode);
+			dump_skb_hdrs(skb);
 			// In macvlan_broadcast_one(), we embed the VLAN header
 			// information even it got failed because netif_rx called
 			// here.
 			ret = macvlan_broadcast_one(skb, vlan, eth, 0) ?:
 			      netif_rx(skb);
-			dump_skb_hdrs(skb);
 			handle_res = RX_HANDLER_CONSUMED;
 			goto out;
 		}
@@ -741,13 +754,15 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 	skb->pkt_type = PACKET_HOST;
 
 	// Ataya
-	// if (skb->dev->xdp_prog && skb_vlan_tag_present(skb)) {
-	if (skb_vlan_tag_present(skb)) {
+	// Now, skb->dev changed to next net_device,
+	// which could be N2, N3, N6, or other macvlan device
+	if (strstr(dev->name, "xdp") && skb_vlan_tag_present(skb)) {
 		int ret;
 
 		AMACV_LOG("present VLAN proto-vid: %04x-%04x\n",
 			skb->vlan_proto, skb_vlan_tag_get_id(skb));
 
+		dump_skb_hdrs(skb);
 		skb_reset_network_header(skb);
 		if (!skb_transport_header_was_set(skb))
 			skb_reset_transport_header(skb);
@@ -786,6 +801,7 @@ static int macvlan_queue_xmit(struct sk_buff *skb, struct net_device *dev)
 		/* send to other bridge ports directly */
 		if (is_multicast_ether_addr(eth->h_dest)) {
 			// Ataya
+			dump_skb_hdrs(skb);
 			skb_reset_mac_header(skb);
 			skb_reset_network_header(skb);
 			if (!skb_transport_header_was_set(skb))
@@ -807,6 +823,7 @@ static int macvlan_queue_xmit(struct sk_buff *skb, struct net_device *dev)
 		}
 	}
 xmit_world:
+	dump_skb_hdrs(skb);
 	skb->dev = vlan->lowerdev;
 	skb_reset_mac_header(skb);
 	skb_reset_network_header(skb);
