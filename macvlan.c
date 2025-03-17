@@ -32,6 +32,9 @@
 #include <net/xfrm.h>
 #include <linux/netpoll.h>
 #include <linux/phy.h>
+#include <linux/version.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
 
 #define MACVLAN_HASH_BITS	8
 #define MACVLAN_HASH_SIZE	(1<<MACVLAN_HASH_BITS)
@@ -40,8 +43,8 @@
 #define MACVLAN_F_PASSTHRU		1
 #define MACVLAN_F_ADDRCHANGE	2
 
-#define DRV_VERSION 	"0.0.3"
-#define ATAYA_VER_STR	"Ataya-v0.0.3"
+#define DRV_VERSION 	"0.0.4"
+#define ATAYA_VER_STR	"Ataya-v0.0.4"
 
 struct macvlan_port {
 	struct net_device	*dev;
@@ -67,6 +70,23 @@ struct macvlan_source_entry {
 struct macvlan_skb_cb {
 	const struct macvlan_dev *src;
 };
+
+struct proc_dir_entry *proc_ataya_mac = NULL;
+struct proc_dir_entry *proc_mac_entry = NULL;
+struct proc_dir_entry *proc_show_mac = NULL;
+
+typedef struct ataya_mac {
+    struct list_head list;
+	u64 addr;
+} ataya_mac_t;
+
+typedef struct ataya_iface {
+    struct list_head list;
+	char iface[32];
+    struct list_head mac_list;
+} ataya_iface_t;
+
+struct list_head ataya_iface_macs;
 
 #define MACVLAN_SKB_CB(__skb) ((struct macvlan_skb_cb *)&((__skb)->cb[0]))
 
@@ -1949,6 +1969,308 @@ static struct notifier_block macvlan_notifier_block __read_mostly = {
 	.notifier_call	= macvlan_device_event,
 };
 
+/* ------------------------------------------------------------------
+ *                      Proc add_mac
+ * ------------------------------------------------------------------
+ * */
+static void mac_entry_new(char *iface, u64 mac_addr)
+{
+  ataya_iface_t *aif;
+  ataya_mac_t *amac;
+
+  aif = kzalloc(sizeof(*aif), GFP_KERNEL);
+  if (!aif) {
+    printk("%s: Failed to allocate memory for iface\n",
+      __func__);
+    return;
+  }
+
+  amac = kzalloc(sizeof(*amac), GFP_KERNEL);
+  if (!amac) {
+    printk("%s: Failed to allocate memory for iface's mac\n",
+      __func__);
+    kfree(aif);
+    return;
+  }
+
+  strcpy(aif->iface, iface);
+  INIT_LIST_HEAD(&aif->mac_list);
+
+  amac->addr = mac_addr;
+  INIT_LIST_HEAD(&amac->list);
+  list_add_tail(&amac->list, &aif->mac_list);
+
+  INIT_LIST_HEAD(&aif->list);
+  list_add_tail(&aif->list, &ataya_iface_macs);
+}
+
+static void mac_entry_update(ataya_iface_t *aif, u64 mac_addr)
+{
+  ataya_mac_t *amac;
+
+  amac = kzalloc(sizeof(*amac), GFP_KERNEL);
+  if (!amac) {
+    printk("%s: Failed to allocate memory for iface's mac\n",
+      __func__);
+    return;
+  }
+
+  // TODO: Validate duplicate mac addr exist or not
+
+  amac->addr = mac_addr;
+  INIT_LIST_HEAD(&amac->list);
+  list_add_tail(&amac->list, &aif->mac_list);
+}
+
+static void mac_entry_add(char *iface, u64 mac_addr)
+{
+  ataya_iface_t *aif, *tmp;
+
+  if (strlen(iface) == 0 || mac_addr ==  0)
+    return;
+
+    if (list_empty(&ataya_iface_macs)) {
+      mac_entry_new(iface, mac_addr);
+      return;
+    }
+
+  list_for_each_entry_safe(aif, tmp, &ataya_iface_macs, list) {
+    if (strcmp(aif->iface, iface) == 0) {
+      mac_entry_update(aif, mac_addr);
+      return;
+    }
+  }
+
+  mac_entry_new(iface, mac_addr);
+}
+
+static void mac_entry_del(char *iface, u64 mac_addr)
+{
+  ataya_iface_t *aif, *tmp;
+
+  list_for_each_entry_safe(aif, tmp, &ataya_iface_macs, list) {
+    if (strcmp(aif->iface, iface) == 0) {
+      ataya_mac_t *amac, *atmp;
+      list_for_each_entry_safe(amac, atmp, &aif->mac_list, list) {
+        if (amac->addr == mac_addr) {
+          list_del_init(&amac->list);
+          kfree(amac);
+          break;
+        }
+      }
+      if (list_empty(&aif->mac_list)) {
+        list_del_init(&aif->list);
+        kfree(aif);
+      }
+      return;
+    }
+  }
+}
+
+static void mac_entry_iface_clear(char *iface)
+{
+  ataya_iface_t *aif, *tmp;
+
+  list_for_each_entry_safe(aif, tmp, &ataya_iface_macs, list) {
+    if (strcmp(aif->iface, iface) == 0) {
+      ataya_mac_t *amac, *atmp;
+      list_for_each_entry_safe(amac, atmp, &aif->mac_list, list) {
+        list_del_init(&amac->list);
+        kfree(amac);
+      }
+      if (list_empty(&aif->mac_list)) {
+        list_del_init(&aif->list);
+        kfree(aif);
+      }
+      return;
+    }
+  }
+}
+
+static void mac_entry_clearall(void)
+{
+  ataya_iface_t *aif, *tmp;
+  ataya_mac_t *amac, *atmp;
+
+  list_for_each_entry_safe(aif, tmp, &ataya_iface_macs, list) {
+    list_for_each_entry_safe(amac, atmp, &aif->mac_list, list) {
+      list_del_init(&amac->list);
+      kfree(amac);
+    }
+    if (list_empty(&aif->mac_list)) {
+      list_del_init(&aif->list);
+      kfree(aif);
+    }
+  }
+}
+
+//  echo <operation> <iface_name> <mac_addr> > /proc/ataya_mac/mac_entry
+//		operation:
+//			- 1 for add a mac entry
+//			- 2 for delete a mac entry/a iface/clear all
+// Ex:
+//	echo 1 enp10s0 0x554433221100 > /proc/ataya_mac/mac_entry
+//	echo 2 enp10s0 0x554433221100 > /proc/ataya_mac/mac_entry
+//	echo 2 enp10s0 0x0 > /proc/ataya_mac/mac_entry
+//	echo 2 0 0x0 > /proc/ataya_mac/mac_entry
+static ssize_t mac_entry_write(struct file *filp, const char __user *buffer,
+  size_t len, loff_t *dptr)
+{
+  char ibuf[128];
+  unsigned long buf_len = min(len, sizeof(ibuf) - 1);
+  char iface[32];
+  u64 mac_addr;
+  unsigned int op;
+
+  if (copy_from_user(ibuf, buffer, buf_len)) {
+      printk("Failed to read buffer: %s\n", buffer);
+      goto err;
+  }
+  ibuf[buf_len] = 0;
+
+  if (sscanf(ibuf, "%u %s %llx", &op, iface, &mac_addr) != 3) {
+    printk("proc write add_mac: %s is not valid\n", ibuf);
+    goto err;
+  }
+
+  printk("op: %u iface: %s mac: %012llx\n", op,
+    iface, mac_addr);
+
+  if (op == 1) {
+    mac_entry_add(iface, mac_addr);
+  } else if (op == 2) {
+    if (strlen(iface) != 0 && mac_addr != 0)
+      mac_entry_del(iface, mac_addr);
+    else if (mac_addr == 0)
+      mac_entry_iface_clear(iface);
+    else
+      mac_entry_clearall();
+  } else {
+    printk("Invalid option: %u\n", op);
+  }
+
+  return strnlen(ibuf, buf_len);
+
+  err:
+  return -1;
+}
+
+/* ------------------------------------------------------------------
+ *                      Proc show_mac
+ * ------------------------------------------------------------------
+ * */
+static int mac_rd(struct seq_file *s, void *v)
+{
+  ataya_iface_t *aif, *tmp;
+  ataya_mac_t *amac, *atmp;
+
+  seq_printf(s, "MAC entries: \n");
+  list_for_each_entry_safe(aif, tmp, &ataya_iface_macs, list) {
+    seq_printf(s, "Interface: %s\n", aif->iface);
+    list_for_each_entry_safe(amac, atmp, &aif->mac_list, list) {
+      seq_printf(s, "\t MAC: %#llx\n", amac->addr);
+    }
+  }
+  return 0;
+}
+
+static int show_mac_read(struct inode *inode, struct file *file)
+{
+    return single_open(file, mac_rd, NULL);
+}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
+static const struct proc_ops mac_entry_ops = {
+  .proc_open = NULL,
+  .proc_read = seq_read,
+  .proc_write = mac_entry_write,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+#else
+static const struct file_operations mac_entry_ops = {
+  .owner      = THIS_MODULE,
+  .open       = NULL,
+  .read       = seq_read,
+  .write      = mac_entry_write,
+  .llseek     = seq_lseek,
+  .release    = single_release,
+};
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
+static const struct proc_ops show_mac_ops = {
+  .proc_open = show_mac_read,
+  .proc_read = seq_read,
+  // .proc_write = seq_write,
+  .proc_lseek = seq_lseek,
+  .proc_release = single_release,
+};
+#else
+static const struct file_operations show_mac_ops = {
+  .owner      = THIS_MODULE,
+  .open       = show_mac_read,
+  .read       = seq_read,
+  // .write      = seq_write,
+  .llseek     = seq_lseek,
+  .release    = single_release,
+};
+#endif
+
+static int ataya_init(void)
+{
+  proc_ataya_mac = proc_mkdir("ataya_mac", NULL);
+  if (!proc_ataya_mac) {
+    printk("Failed to create /proc/ataya_mac\n");
+    goto err;
+  }
+
+  proc_mac_entry = proc_create("mac_entry", (S_IFREG | S_IRUGO | S_IWUGO),
+    proc_ataya_mac, &mac_entry_ops);
+  if (!proc_mac_entry) {
+    printk("Failed to create /proc/ataya_mac/mac_entry\n");
+    goto remove_ataya;
+  }
+
+  proc_show_mac = proc_create("show_mac", (S_IFREG | S_IRUGO | S_IWUGO),
+    proc_ataya_mac, &show_mac_ops);
+  if (!proc_show_mac) {
+    printk("Failed to create /proc/ataya_mac/show_mac\n");
+    goto remove_add_mac;
+  }
+
+  INIT_LIST_HEAD(&ataya_iface_macs);
+
+  printk("Initialized ataya's MAC proc\n");
+  return 0;
+
+  remove_add_mac:
+  remove_proc_entry("mac_entry", proc_ataya_mac);
+  proc_mac_entry = NULL;
+
+  remove_ataya:
+  remove_proc_entry("ataya_mac", NULL);
+  proc_ataya_mac = NULL;
+
+  err:
+  return -1;
+}
+
+static void ataya_exit(void)
+{
+  if (!proc_ataya_mac) {
+    return;
+  }
+
+  remove_proc_entry("mac_entry", proc_ataya_mac);
+  remove_proc_entry("show_mac", proc_ataya_mac);
+  remove_proc_entry("ataya_mac", NULL);
+
+  proc_mac_entry = NULL;
+  proc_show_mac = NULL;
+  proc_ataya_mac = NULL;
+}
+
 static int __init macvlan_init_module(void)
 {
 	int err;
@@ -1958,6 +2280,11 @@ static int __init macvlan_init_module(void)
 	err = macvlan_link_register(&macvlan_link_ops);
 	if (err < 0)
 		goto err1;
+
+	err = ataya_init();
+	if (err < 0)
+		goto err1;
+
 	printk("Ataya macvlan driver %s Initialzied\n", ATAYA_VER_STR);
 	return 0;
 err1:
@@ -1969,6 +2296,7 @@ static void __exit macvlan_cleanup_module(void)
 {
 	rtnl_link_unregister(&macvlan_link_ops);
 	unregister_netdevice_notifier(&macvlan_notifier_block);
+	ataya_exit();
 	printk("Ataya macvlan driver %s De-Initialzied\n", ATAYA_VER_STR);
 }
 
